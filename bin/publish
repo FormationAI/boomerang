@@ -1,0 +1,22 @@
+#!/bin/sh -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+STORE_ROOT="s3://formation-dispensary/artifacts"
+SHA="$(git log --pretty=format:%h -n 1)"
+DATE="$(TZ=UTC date +%Y%m%d%H%M%S)"
+BRANCH="${BUILDKITE_BRANCH:=$(git rev-parse --abbrev-ref HEAD)}"
+SUFFIX="branches"
+if [ "$BRANCH" == "master" ]; then
+    SUFFIX="master"
+fi
+
+PREFIX="${STORE_ROOT}/${SUFFIX}"
+FILENAME="${DATE}-${SHA}.zip"
+
+OUTPUT="${PREFIX}/boomerang/${FILENAME}"
+
+aws s3 cp ${ROOT}/boomerang/build/ ${OUTPUT}
+
+COMMIT=$(git rev-parse HEAD)
+echo ${OUTPUT} | aws s3 cp - "s3://formation-dispensary/crusades/commit/boomerang/${COMMIT}"
