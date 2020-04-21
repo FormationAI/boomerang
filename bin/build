@@ -1,0 +1,21 @@
+#!/bin/sh -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+section() {
+  echo "--- $(TZ=UTC date +%Y%m%d-%H:%M:%S) - [FormationAI/boomerang] - $1"
+}
+
+cd "${ROOT}"
+
+rm -rf ./build ./node_modules
+
+section "Installing dependencies"
+
+npm install --no-save --no-color --verbose
+
+section "Build"
+
+grunt build
+
+section "Done :tada:"
