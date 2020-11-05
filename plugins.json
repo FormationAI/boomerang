@@ -4,6 +4,7 @@
         "plugins/md5.js",
         "plugins/spa.js",
         "plugins/history.js",
-        "plugins/rt.js"
+        "plugins/rt.js",
+        "plugins/errors.js"
     ]
 }
