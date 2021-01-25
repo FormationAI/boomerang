@@ -1,0 +1,19 @@
+steps:
+  - label: Build & Lint & Test
+    key: "build"
+    command:
+      - ".ci/build"
+    agents:
+      napali: true
+      queue: napali
+
+  - label: Publish
+    key: "publish"
+    branches: "master"
+    command:
+      - ".ci/build"
+    depends_on:
+      - "build"
+    agents:
+      napali: true
+      queue: napali

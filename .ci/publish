@@ -19,4 +19,4 @@ OUTPUT="${PREFIX}/boomerang/${FILENAME}"
 aws s3 cp ${ROOT}/boomerang/build/ ${OUTPUT}
 
 COMMIT=$(git rev-parse HEAD)
-echo ${OUTPUT} | aws s3 cp - "s3://formation-dispensary/crusades/commit/boomerang/${COMMIT}"
+echo ${OUTPUT} | aws s3 cp - "s3://formation-dispensary/interfaces/boomerang/commits/${COMMIT}"

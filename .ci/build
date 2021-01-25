@@ -3,7 +3,7 @@
 ROOT="$(git rev-parse --show-toplevel)"
 
 section() {
-  echo "--- $(TZ=UTC date +%Y%m%d-%H:%M:%S) - [FormationAI/boomerang] - $1"
+  echo "--- $(TZ=UTC date +%Y%m%d-%H:%M:%S) - [boomerang] - $1"
 }
 
 cd "${ROOT}"
