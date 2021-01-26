@@ -16,7 +16,7 @@ aws s3 sync ${ROOT}/build/ ${OUTPUT}
 cat <<EOF | buildkite-agent annotate --style "info" --context "PUBLISH" --append >&2
 <details>
   <summary>
-    Published <b>${ENV}</b> to ${SHA}
+    Published to ${SHA}
   </summary>
 
   <h5>Dispensary path</h5>
