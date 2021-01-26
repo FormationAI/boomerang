@@ -12,7 +12,7 @@ rm -rf ./build ./node_modules
 
 section "Installing dependencies"
 
-npm install
+pnpm install
 
 section "Build"
 
