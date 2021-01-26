@@ -11,6 +11,7 @@ steps:
     key: "publish"
     branches: "master"
     command:
+      - ".ci/build"
       - ".ci/publish"
     depends_on:
       - "build"
