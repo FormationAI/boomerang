@@ -3,7 +3,7 @@
 ROOT="$(git rev-parse --show-toplevel)"
 SHA=$(git rev-parse HEAD)
 
-OUTPUT=s3://formation-dispensary/interface/boomerang/commits/${SHA}
+OUTPUT=s3://formation-dispensary/interface/boomerang
 
 BRANCH="${BUILDKITE_BRANCH:=$(git rev-parse --abbrev-ref HEAD)}"
 SUFFIX="branches"
@@ -11,7 +11,11 @@ if [ "$BRANCH" == "master" ]; then
     SUFFIX="master"
 fi
 
-aws s3 sync ${ROOT}/build/ ${OUTPUT}
+# sync to development
+aws s3 sync ${ROOT}/build/ "${OUTPUT}/development"
+
+# sync to commit
+aws s3 sync ${ROOT}/build/ "${OUTPUT}/commits/${SHA}"
 
 cat <<EOF | buildkite-agent annotate --style "info" --context "PUBLISH" --append >&2
 <details>
