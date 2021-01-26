@@ -11,11 +11,12 @@ if [ "$BRANCH" == "master" ]; then
     SUFFIX="master"
 fi
 
-# sync to development
+# publish to development
 aws s3 sync ${ROOT}/build/ "${OUTPUT}/development"
 
-# sync to commit
-aws s3 sync ${ROOT}/build/ "${OUTPUT}/commits/${SHA}"
+# publish to staging/production
+aws s3 sync ${ROOT}/build/ "${OUTPUT}/staging/commits/${SHA}"
+aws s3 sync ${ROOT}/build/ "${OUTPUT}/production/commits/${SHA}"
 
 cat <<EOF | buildkite-agent annotate --style "info" --context "PUBLISH" --append >&2
 <details>
