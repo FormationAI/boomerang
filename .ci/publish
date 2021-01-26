@@ -1,22 +1,26 @@
 #!/bin/sh -eu
 
 ROOT="$(git rev-parse --show-toplevel)"
+SHA=$(git rev-parse HEAD)
 
-STORE_ROOT="s3://formation-dispensary/artifacts"
-SHA="$(git log --pretty=format:%h -n 1)"
-DATE="$(TZ=UTC date +%Y%m%d%H%M%S)"
+OUTPUT=s3://formation-dispensary/interface/boomerang/commits/${SHA}
+
 BRANCH="${BUILDKITE_BRANCH:=$(git rev-parse --abbrev-ref HEAD)}"
 SUFFIX="branches"
 if [ "$BRANCH" == "master" ]; then
     SUFFIX="master"
 fi
 
-PREFIX="${STORE_ROOT}/${SUFFIX}"
-FILENAME="${DATE}-${SHA}.zip"
+aws s3 sync ${ROOT}/build/ ${OUTPUT}
 
-OUTPUT="${PREFIX}/boomerang/${FILENAME}"
+cat <<EOF | buildkite-agent annotate --style "info" --context "PUBLISH" --append >&2
+<details>
+  <summary>
+    Published <b>${ENV}</b> to ${SHA}
+  </summary>
 
-aws s3 cp ${ROOT}/build/ ${OUTPUT}
+  <h5>Dispensary path</h5>
+  <a href="${OUTPUT}">${OUTPUT}</a>
+</details>
+EOF
 
-COMMIT=$(git rev-parse HEAD)
-echo ${OUTPUT} | aws s3 cp - "s3://formation-dispensary/interfaces/boomerang/commits/${COMMIT}"
