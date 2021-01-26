@@ -12,10 +12,10 @@ rm -rf ./build ./node_modules
 
 section "Installing dependencies"
 
-npm install --no-save --no-color --verbose
+pnpm install
 
 section "Build"
 
-grunt build
+pnpm run build
 
 section "Done :tada:"
