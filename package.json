@@ -74,8 +74,6 @@
     "karma-webdriver-launcher": "^1.0.5",
     "mocha": "^3.0.2",
     "performance-now": "^2.1.0",
-    "phantomjs": "^1.9.13",
-    "phantomjs-prebuilt": "^2.1.16",
     "protractor": "^5.2.0",
     "react": "^0.14.0",
     "react-dom": "^0.14.0",
