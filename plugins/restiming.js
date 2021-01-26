@@ -147,7 +147,29 @@
 		/** An IFRAME */
 		"iframe": "a",
 		/** IE11 and Edge (some versions) send "subdocument" instead of "iframe" */
-		"subdocument": "a"
+		"subdocument": "a",
+		/** BODY element */
+		"body": "b",
+		/** INPUT element */
+		"input": "c",
+		/** FRAME element */
+		"frame": "a",
+		/** OBJECT element */
+		"object": "d",
+		/** VIDEO element */
+		"video": "e",
+		/** AUDIO element */
+		"audio": "f",
+		/** SOURCE element */
+		"source": "g",
+		/** TRACK element */
+		"track": "h",
+		/** EMBED element */
+		"embed": "i",
+		/** EventSource */
+		"eventsource": "j",
+		/** The root HTML page itself */
+		"navigation": 6
 	};
 
 	/**
@@ -221,6 +243,9 @@
 
 	// Namespaced data
 	var SPECIAL_DATA_NAMESPACED_TYPE = "5";
+
+	// Service worker type
+	var SPECIAL_DATA_SERVICE_WORKER_TYPE = "6";
 
 	/**
 	 * Converts entries to a Trie (`splitAtPath=true`) or Radix
@@ -426,6 +451,20 @@
 			// more than two nodes and not the top, we can't compress any more
 			return false;
 		}
+	}
+
+	/**
+	 * Rounds up the timing value
+	 *
+	 * @param {number} time Time
+	 * @returns {number} Rounded up timestamp
+	 */
+	function roundUpTiming(time) {
+		if (typeof time !== "number") {
+			time = 0;
+		}
+
+		return Math.ceil(time ? time : 0);
 	}
 
 	/**
@@ -765,7 +804,7 @@
 
 		// look at each IMG and IFRAME
 		els.forEach(function(elname) {
-			var elements = doc.getElementsByTagName(elname), el, i, rect, src;
+			var elements = doc.getElementsByTagName(elname), el, i, rect, src, realImg, nH, nW;
 
 			for (i = 0; i < elements.length; i++) {
 				el = elements[i];
@@ -812,10 +851,10 @@
 
 					// If the image came from a srcset, then the naturalHeight/Width will be density corrected.
 					// We get the actual physical dimensions by assigning the image to an uncorrected Image object.
-					// This should load from in-memory cache, so there should be no extra load.
-					var realImg, nH, nW;
-
-					if (el.currentSrc && (el.srcset || (el.parentNode && el.parentNode.nodeName && el.parentNode.nodeName.toUpperCase() === "PICTURE"))) {
+					// In most cases, this should load from in-memory cache, so there should be no extra load.
+					// When the original image's caching is disabled, this will cause the image to be
+					// re-downloaded which can cause issues with capchas.
+					if (impl.getSrcsetDimensions && el.currentSrc && (el.srcset || (el.parentNode && el.parentNode.nodeName && el.parentNode.nodeName.toUpperCase() === "PICTURE"))) {
 						// We need to create this Image in the window that contains the element, and not
 						// the boomerang window.
 						realImg = el.isConnected ? el.ownerDocument.createElement("IMG") : new BOOMR.window.Image();
@@ -1338,6 +1377,22 @@
 				data += SPECIAL_DATA_PREFIX + SPECIAL_DATA_LINK_ATTR_TYPE + e.linkAttrs;
 			}
 
+			if (e.workerStart && typeof e.workerStart === "number" && e.workerStart !== 0) {
+				// Has Service worker timing data that's non zero. Resource request not intercepted
+				// by Service worker always return 0 as per MDN
+				// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceResourceTiming/workerStart
+
+				// Lets round it and offset from startTime. We are going to round up the workerStart
+				// timing specifically. We are doing this to avoid the issue where the case of Service
+				// worker timestamps being sub-milliseconds more than startTime getting incorrectly
+				// marked as 0ms (due to round down).
+				// We feel marking such cases as 0ms, after rounding down, for workerStart would present
+				// more incorrect indication to the user. Hence the decision to round up.
+				var wsRoundedUp = roundUpTiming(e.workerStart);
+				var workerStartOffset = trimTiming(wsRoundedUp, e.startTime);
+				data += SPECIAL_DATA_PREFIX + SPECIAL_DATA_SERVICE_WORKER_TYPE + toBase36(workerStartOffset);
+			}
+
 			url = trimUrl(e.name, impl.trimUrls);
 
 			if (!e.hasOwnProperty("_data")) {
@@ -1518,9 +1573,6 @@
 			return;
 		}
 
-		BOOMR.removeVar("restiming");
-		BOOMR.removeVar("servertiming");
-
 		/* BEGIN_DEBUG */
 		BOOMR.utils.mark("restiming:build:start");
 		/* END_DEBUG */
@@ -1700,9 +1752,10 @@
 	 *  lookup
 	 */
 	function addToBeacon(r) {
-		BOOMR.addVar("restiming", JSON.stringify(r.restiming));
+		BOOMR.addVar("restiming", JSON.stringify(r.restiming), true);
+
 		if (r.servertiming.length) {
-			BOOMR.addVar("servertiming", BOOMR.utils.serializeForUrl(r.servertiming));
+			BOOMR.addVar("servertiming", BOOMR.utils.serializeForUrl(r.servertiming), true);
 		}
 	}
 
@@ -1778,6 +1831,7 @@
 		serverTiming: true,
 		monitorClearResourceTimings: false,
 		splitAtPath: false,
+		getSrcsetDimensions: false,
 		// overridable
 
 		/**
@@ -1802,14 +1856,6 @@
 
 		onBeacon: function(vars) {
 			var p = BOOMR.getPerformance();
-
-			// clear metrics
-			if (vars.hasOwnProperty("restiming")) {
-				BOOMR.removeVar("restiming");
-			}
-			if (vars.hasOwnProperty("servertiming")) {
-				BOOMR.removeVar("servertiming");
-			}
 
 			if (impl.clearOnBeacon && p) {
 				var clearResourceTimings = p.clearResourceTimings || p.webkitClearResourceTimings;
@@ -1848,6 +1894,8 @@
 		 * `performance.clearResourceTimings`.
 		 * @param {boolean} [config.ResourceTiming.splitAtPath] Whether or not to split the ResourceTiming
 		 * compressed Trie at the path separator (faster processing, but larger result).
+		 * @param {boolean} [config.ResourceTiming.getSrcsetDimensions] Whether or not to collect physical
+		 * dimensions of srcset images. Setting this will cause uncacheable images to be re-downloaded.
 		 *
 		 * @returns {@link BOOMR.plugins.ResourceTiming} The ResourceTiming plugin for chaining
 		 * @memberof BOOMR.plugins.ResourceTiming
@@ -1855,7 +1903,7 @@
 		init: function(config) {
 			BOOMR.utils.pluginConfig(impl, config, "ResourceTiming",
 				["xssBreakWords", "clearOnBeacon", "urlLimit", "trimUrls", "trackedResourceTypes", "serverTiming",
-					"monitorClearResourceTimings", "splitAtPath"]);
+					"monitorClearResourceTimings", "splitAtPath", "getSrcsetDimensions"]);
 
 			if (impl.initialized) {
 				return this;
@@ -1973,6 +2021,7 @@
 		//
 		/* BEGIN_DEBUG */,
 		trimTiming: trimTiming,
+		roundUpTiming: roundUpTiming,
 		convertToTrie: convertToTrie,
 		optimizeTrie: optimizeTrie,
 		findPerformanceEntriesForFrame: findPerformanceEntriesForFrame,
@@ -1997,6 +2046,7 @@
 		SPECIAL_DATA_SIZE_TYPE: SPECIAL_DATA_SIZE_TYPE,
 		SPECIAL_DATA_SCRIPT_ATTR_TYPE: SPECIAL_DATA_SCRIPT_ATTR_TYPE,
 		SPECIAL_DATA_LINK_ATTR_TYPE: SPECIAL_DATA_LINK_ATTR_TYPE,
+		SPECIAL_DATA_SERVICE_WORKER_TYPE: SPECIAL_DATA_SERVICE_WORKER_TYPE,
 		ASYNC_ATTR: ASYNC_ATTR,
 		DEFER_ATTR: DEFER_ATTR,
 		LOCAT_ATTR: LOCAT_ATTR,

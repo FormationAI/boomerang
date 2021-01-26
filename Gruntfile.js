@@ -25,7 +25,7 @@ var boomerangE2ETestDomain = grunt.option("main-domain") || DEFAULT_TEST_MAIN_DO
 var BUILD_PATH = "build";
 var TEST_BUILD_PATH = path.join("tests", "build");
 var TEST_RESULTS_PATH = path.join("tests", "results");
-var TEST_DEBUG_PORT = 4002;
+var TEST_DEBUG_PORT = parseInt(grunt.option("test-port")) || 4002;
 var TEST_URL_BASE = grunt.option("test-url") || "http://" + boomerangE2ETestDomain + ":" + TEST_DEBUG_PORT;
 
 var SELENIUM_ADDRESS = grunt.option("selenium-address") || "http://" + boomerangE2ETestDomain + ":4444/wd/hub";
@@ -52,6 +52,7 @@ var DEFAULT_UGLIFY_BOOMERANGJS_OPTIONS = {
 	ie8: true,
 	sourceMap: true,
 	compress: {
+		keep_fnames: true,
 		sequences: false
 	}
 };
@@ -71,6 +72,14 @@ if (Array.isArray(webDriverVersions)) {
 	webDriverVersions = webDriverVersions.join(" ");
 }
 
+function fileForHtml(file) {
+	return grunt.file.read(file)
+		.replace(/&/g, "&amp;")
+		.replace(/"/g, "&quot;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+}
+
 //
 // Grunt config
 //
@@ -80,7 +89,9 @@ module.exports = function() {
 	//
 	var testsDir = path.join(__dirname, "tests");
 	var perfTestsDir = path.join(testsDir, "perf");
+	var pageTemplateSnippetsDir = path.join(testsDir, "page-template-snippets");
 	var pluginsDir = path.join(__dirname, "plugins");
+	var snippetsDir = path.join(__dirname, "snippets");
 
 	//
 	// Determine source files:
@@ -90,6 +101,15 @@ module.exports = function() {
 	var plugins = grunt.file.readJSON("plugins.json");
 	src.push(plugins.plugins);
 	src.push(path.join(pluginsDir, "zzz-last-plugin.js"));
+
+	//
+	// Snippets
+	//
+	var autoXhrSnippet = path.join(snippetsDir, "autoxhr-snippet.js");
+	var continuitySnippet = path.join(snippetsDir, "continuity-snippet.js");
+	var errorsSnippet = path.join(snippetsDir, "errors-snippet.js");
+	var loaderSnippet = path.join(snippetsDir, "loader-snippet.js");
+	var loaderSnippetAfterOnload = path.join(snippetsDir, "loader-snippet-after-onload.js");
 
 	//
 	// Ensure env.json exists
@@ -108,7 +128,8 @@ module.exports = function() {
 	// load the env.json or default content
 	if (fs.existsSync(envFile)) {
 		env = grunt.file.readJSON("tests/server/env.json");
-	} else {
+	}
+	else {
 		// default content
 		env = {
 			publish: "www"
@@ -170,6 +191,10 @@ module.exports = function() {
 	var buildTest = testBuildPathPrefix + "-latest-debug.js";
 	var buildTestMin = testBuildPathPrefix + "-latest-debug.min.js";
 
+	var buildPluginsDir = path.join(BUILD_PATH, "plugins");
+	var buildSnippetsDir = path.join(BUILD_PATH, "snippets");
+	var buildSnippetsStrippedDir = path.join(BUILD_PATH, "snippets.stripped");
+
 	//
 	// Build configuration
 	//
@@ -223,6 +248,26 @@ module.exports = function() {
 			release: {
 				src: src,
 				dest: buildRelease
+			},
+			autoXhrSnippet: {
+				src: autoXhrSnippet,
+				dest: path.join(pageTemplateSnippetsDir, "instrumentXHRSnippetNoScript.tpl")
+			},
+			continuitySnippet: {
+				src: continuitySnippet,
+				dest: path.join(pageTemplateSnippetsDir, "continuitySnippetNoScript.tpl")
+			},
+			errorsSnippet: {
+				src: errorsSnippet,
+				dest: path.join(pageTemplateSnippetsDir, "captureErrorsSnippetNoScript.tpl")
+			},
+			loaderSnippet: {
+				src: loaderSnippet,
+				dest: path.join(pageTemplateSnippetsDir, "boomerangSnippetNoScript.tpl")
+			},
+			loaderSnippetAfterOnload: {
+				src: loaderSnippetAfterOnload,
+				dest: path.join(pageTemplateSnippetsDir, "boomerangAfterOnloadSnippetNoScript.tpl")
 			}
 		},
 		mkdir: {
@@ -234,10 +279,9 @@ module.exports = function() {
 		},
 		eslint: {
 			target: [
-				"Gruntfile.js",
-				"boomerang.js",
-				"*.config*.js",
+				"*.js",
 				"plugins/*.js",
+				"snippets/*.js",
 				"tasks/*.js",
 				"tests/*.js",
 				"tests/unit/*.js",
@@ -250,7 +294,8 @@ module.exports = function() {
 				"tests/test-templates/**/*.js",
 				"!tests/page-templates/12-react/support/*",
 				"!tests/page-templates/03-load-order/01-after-page-load.html",  // fails on snippet include
-				"!tests/page-templates/03-load-order/07-after-page-load-boomr-page-ready.html"  // fails on snippet include
+				"!tests/page-templates/03-load-order/07-after-page-load-boomr-page-ready.html",  // fails on snippet include
+				"!tests/page-templates/29-opt-out-opt-in/01-opt-in-origin-injected-loader-wrapper.html"  // parse error on snippet include
 			]
 		},
 		"string-replace": {
@@ -331,6 +376,102 @@ module.exports = function() {
 					]
 				}
 			},
+			"doc-source-code": {
+				files: [
+					{
+						"./": "build/doc/boomerangjs/**/*.html"
+					}
+				],
+				options: {
+					replacements: [
+						{
+							pattern: /%minified_consent_inline_plugin_code%/g,
+							replacement: fileForHtml.bind(this, "build/plugins/consent-inlined-plugin.min.js")
+						},
+						{
+							pattern: /%loader_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets.stripped/loader-snippet.js")
+						},
+						{
+							pattern: /%minified_loader_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets/loader-snippet.min.js")
+						},
+						{
+							pattern: /%delayed_loader_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets.stripped/loader-snippet-after-onload.js")
+						},
+						{
+							pattern: /%minified_delayed_loader_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets/loader-snippet-after-onload.min.js")
+						},
+						{
+							pattern: /\/\* eslint-.*\*\/\n/g,
+							replacement: ""
+						},
+						{
+							pattern: /%autoxhr_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets.stripped/autoxhr-snippet.js")
+						},
+						{
+							pattern: /%minified_autoxhr_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets/autoxhr-snippet.min.js")
+						},
+						{
+							pattern: /%continuity_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets.stripped/continuity-snippet.js")
+						},
+						{
+							pattern: /%minified_continuity_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets/continuity-snippet.min.js")
+						},
+						{
+							pattern: /%errors_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets.stripped/errors-snippet.js")
+						},
+						{
+							pattern: /%minified_errors_snippet%/g,
+							replacement: fileForHtml.bind(this, "build/snippets/errors-snippet.min.js")
+						}
+					]
+				}
+			},
+			readme: {
+				files: [
+					{
+						src: "doc/README.template.md",
+						dest: "README.md"
+					}
+				],
+				options: {
+					replacements: [
+						{
+							pattern: /%loader_snippet%/g,
+							// not escaping for HTML in a Markdown file
+							replacement: grunt.file.read.bind(this, "snippets/loader-snippet.js")
+						},
+						{
+							pattern: /%minified_loader_snippet%/g,
+							// not escaping for HTML in a Markdown file
+							replacement: grunt.file.read.bind(this, "build/snippets/loader-snippet.min.js")
+						}
+					]
+				}
+			},
+			"plugins-remove-sourcemappingurl": {
+				files: [
+					{
+						"./": path.join(buildPluginsDir, "*.min.js")
+					}
+				],
+				options: {
+					replacements: [
+						{
+							pattern: /\n\/\/# sourceMappingURL=.*/g,
+							replacement: ""
+						}
+					]
+				}
+			},
 			"remove-sourcemappingurl": {
 				files: [
 					{
@@ -342,6 +483,26 @@ module.exports = function() {
 					replacements: [
 						{
 							pattern: /\/\/# sourceMappingURL=.*/g,
+							replacement: ""
+						}
+					]
+				}
+			},
+			"eslint-rules": {
+				files: [
+					{
+						src: "README.md",
+						dest: "README.md"
+					},
+					{
+						src: path.join(pageTemplateSnippetsDir, "boomerangSnippetNoScript.tpl"),
+						dest: path.join(pageTemplateSnippetsDir, "boomerangSnippetNoScript.tpl")
+					}
+				],
+				options: {
+					replacements: [
+						{
+							pattern: /\/\* eslint-.*\*\/\n/g,
 							replacement: ""
 						}
 					]
@@ -382,6 +543,26 @@ module.exports = function() {
 					start_comment: "BEGIN_PROD",
 					end_comment: "END_PROD"
 				}
+			},
+			"test-code": {
+				files: [{
+					src: [
+						"README.md"
+					]
+				}],
+				options: {
+					start_comment: "BEGIN_TEST_CODE",
+					end_comment: "END_TEST_CODE"
+				}
+			},
+			"snippets": {
+				files: [{
+					src: path.join(buildSnippetsStrippedDir, "*.js")
+				}],
+				options: {
+					start_comment: "BEGIN_TEST_CODE",
+					end_comment: "END_TEST_CODE"
+				}
 			}
 		},
 		copy: {
@@ -405,6 +586,18 @@ module.exports = function() {
 						src: "tests/perf/results/metrics.json",
 						force: true,
 						dest: "tests/perf/results/baseline.json"
+					}
+				]
+			},
+			"snippets-stripped": {
+				files: [
+					{
+						expand: true,
+						nonull: true,
+						cwd: snippetsDir,
+						src: "*.js",
+						force: true,
+						dest: buildSnippetsStrippedDir
 					}
 				]
 			}
@@ -433,6 +626,21 @@ module.exports = function() {
 					dest: buildTestMin
 				}]
 			},
+			"inline-consent-plugin": {
+				options: {
+					preserveComments: false,
+					mangle: true,
+					banner: "",
+					sourceMap: false,
+					compress: {
+						sequences: false
+					}
+				},
+				files: [{
+					src: "plugins/consent-inlined-plugin.js",
+					dest: path.join(pageTemplateSnippetsDir, "consentInlinePluginNoScriptMin.tpl")
+				}]
+			},
 			plugins: {
 				options: {
 					preserveComments: false,
@@ -447,7 +655,7 @@ module.exports = function() {
 					expand: true,
 					cwd: "plugins/",
 					src: ["./*.js"],
-					dest: "build/plugins/",
+					dest: buildPluginsDir,
 					ext: ".min.js",
 					extDot: "first"
 				}]
@@ -457,15 +665,16 @@ module.exports = function() {
 					preserveComments: false,
 					mangle: true,
 					banner: "",
-					compress: {
-						sequences: false
-					}
+					// NOTE: Not compressing so things like our <bo + dy> optimization aren't removed
+					compress: false
 				},
 				files: [{
 					expand: true,
-					cwd: "tests/page-template-snippets/",
-					src: ["instrumentXHRSnippetNoScript.tpl"],
-					dest: "build/snippets/",
+					cwd: buildSnippetsStrippedDir,
+					src: [
+						"*.js"
+					],
+					dest: buildSnippetsDir,
 					ext: ".min.js",
 					extDot: "first"
 				}]
@@ -503,9 +712,9 @@ module.exports = function() {
 				},
 				files: [{
 					expand: true,
-					cwd: "build/plugins",
+					cwd: buildPluginsDir,
 					src: "./*.js",
-					dest: "build/plugins/",
+					dest: buildPluginsDir,
 					ext: ".min.js.gz",
 					extDot: "first"
 				}]
@@ -745,7 +954,7 @@ module.exports = function() {
 		protractor_webdriver: {
 			options: {
 				keepAlive: true,
-				command: "webdriver-manager start " + webDriverVersions
+				command: "webdriver-manager start " + (webDriverVersions || "")
 			},
 			e2e: {
 			}
@@ -866,7 +1075,7 @@ module.exports = function() {
 					"doc/**/**",
 					"README.md"
 				],
-				tasks: ["clean", "jsdoc"]
+				tasks: ["clean", "jsdoc", "doc-source-code"]
 			}
 		}
 	});
@@ -902,7 +1111,7 @@ module.exports = function() {
 		return require(path.join(testsDir, "builder"))(
 			this,
 			path.join(testsDir, "page-templates"),
-			path.join(testsDir, "page-template-snippets"),
+			pageTemplateSnippetsDir,
 			path.join(testsDir, "pages"),
 			path.join(testsDir, "e2e"),
 			path.join(testsDir, "e2e", "e2e.json")
@@ -913,7 +1122,7 @@ module.exports = function() {
 		return require(path.join(testsDir, "builder"))(
 			this,
 			path.join(testsDir, "perf", "page-templates"),
-			path.join(testsDir, "page-template-snippets"),
+			pageTemplateSnippetsDir,
 			path.join(testsDir, "perf", "pages"),
 			path.join(testsDir, "perf", "pages"),
 			path.join(testsDir, "perf", "scenarios.json")
@@ -943,8 +1152,25 @@ module.exports = function() {
 		//
 		// Build
 		//
-		"build": ["concat", "build:apply-templates", "githash", "uglify", "string-replace:remove-sourcemappingurl", "compress", "metrics"],
-		"build:test": ["concat:debug", "concat:debug-tests", "!build:apply-templates", "uglify:debug-test-min"],
+		"build": [
+			"concat",
+			"build:apply-templates",
+			"githash",
+			"copy:snippets-stripped",
+			"strip_code:snippets",
+			"uglify",
+			"string-replace:remove-sourcemappingurl",
+			"compress",
+			"metrics"
+		],
+
+		"build:test": [
+			"concat:debug",
+			"concat:debug-tests",
+			"!build:apply-templates",
+			"uglify:debug-test-min",
+			"uglify:inline-consent-plugin"
+		],
 
 		// Build steps
 		"build:apply-templates": [
@@ -963,6 +1189,26 @@ module.exports = function() {
 		// Lint
 		//
 		"lint": ["eslint"],
+
+		//
+		// Docs
+		//
+		"doc-source-code": [
+			"uglify:plugins",
+			"string-replace:plugins-remove-sourcemappingurl",
+			"string-replace:doc-source-code"
+		],
+
+		// Documentation
+		"doc": [
+			"string-replace:readme",
+			"strip_code:test-code",
+			"string-replace:eslint-rules",
+			"jsdoc",
+			"strip_code:test-code",
+			"doc-source-code"
+		],
+		"test:doc": ["clean", "jsdoc", "doc-source-code", "express:doc", "watch:doc"],
 
 		//
 		// Test tasks
@@ -1011,9 +1257,6 @@ module.exports = function() {
 		"test:e2e:Edge": ["test:e2e:browser", "protractor:Edge"],
 		"test:e2e:IE": ["test:e2e:browser", "protractor:IE"],
 		"test:e2e:Safari": ["test:e2e:browser", "protractor:Safari"],
-
-		// Documentation
-		"test:doc": ["clean", "jsdoc", "express:doc", "watch:doc"],
 
 		// SauceLabs tests
 		"test:matrix": ["test:matrix:unit", "test:matrix:e2e"],

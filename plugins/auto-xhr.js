@@ -7,6 +7,8 @@
  * This plugin also monitors DOM manipulations following a XHR to filter out
  * "background" XHRs.
  *
+ * This plugin has a corresponding {@tutorial header-snippets} that helps monitor XHRs prior to Boomerang loading.
+ *
  * For information on how to include this plugin, see the {@tutorial building} tutorial.
  *
  * ## What is Measured
@@ -275,6 +277,19 @@
 	var SPA_TIMEOUT = 1000;
 
 	/**
+	 * @constant
+	 * @desc
+	 * For early beacons.
+	 * Single Page Applications get an additional timeout after the resource requests in
+	 * flight reaches 0 for the first time.
+	 * We want to allow some time for the SPA to fill in any custom dimensions that we
+	 * capture on the early beacon.
+	 * @type {number}
+	 * @default
+	 */
+	var SPA_EARLY_TIMEOUT = 100;
+
+	/**
 	 * Clicks and XHR events get 50ms for an interesting thing to happen before
 	 * being cancelled.
 	 * Default is 50ms, overridable with xhrIdleTimeout
@@ -451,6 +466,7 @@
 	function MutationHandler() {
 		this.watch = 0;
 		this.timer = null;
+		this.timerEarlyBeacon = null;
 
 		this.pending_events = [];
 		this.lastSpaLocation = null;
@@ -561,8 +577,9 @@
 			nodes_to_wait: 0,  // MO resources + xhrs currently outstanding + wait filter (max: 1)
 			total_nodes: 0,  // total MO resources + xhrs + wait filter (max: 1)
 			resources: [],  // resources reported to MO handler (no xhrs)
+			complete: false,
 			aborted: false,  // this event was aborted
-			complete: false
+			firedEarlyBeacon: false
 		},
 		    i,
 		    last_ev,
@@ -724,10 +741,22 @@
 				// save the last SPA location
 				self.lastSpaLocation = ev.resource.url;
 
-				// if this was a SPA nav that triggered no additional resources, substract the
-				// SPA_TIMEOUT from now to determine the end time
-				if (!ev.forced && ev.total_nodes === 0) {
-					ev.resource.timing.loadEventEnd = now - impl.spaIdleTimeout;
+				if (!ev.forced) {
+					// if this was a SPA soft nav that triggered no additional resources, call it
+					// a 1ms duration
+					if (ev.type === "spa" && ev.total_nodes === 0) {
+						ev.resource.timing.loadEventEnd = ev.resource.timing.requestStart + 1;
+					}
+
+					// if the event wasn't forced then the SPA hard nav should have the page's
+					// onload end as its minimum load end time
+					if (ev.type === "spa_hard") {
+						var p = BOOMR.getPerformance();
+						if (p && p.timing && p.timing.loadEventEnd && ev.resource.timing.loadEventEnd &&
+						    ev.resource.timing.loadEventEnd < p.timing.loadEventEnd) {
+							ev.resource.timing.loadEventEnd = p.timing.loadEventEnd;
+						}
+					}
 				}
 			}
 
@@ -793,11 +822,9 @@
 				// If the SPA load was aborted, set the rt.quit and rt.abld flags
 				if (typeof eventIndex === "number" && self.pending_events[eventIndex].aborted) {
 					// Save the URL otherwise it might change before we have a chance to put it on the beacon
-					BOOMR.addVar("pgu", d.URL);
-					BOOMR.addVar("rt.quit", "");
-					BOOMR.addVar("rt.abld", "");
-
-					impl.addedVars.push("pgu", "rt.quit", "rt.abld");
+					BOOMR.addVar("pgu", d.URL, true);
+					BOOMR.addVar("rt.quit", "", true);
+					BOOMR.addVar("rt.abld", "", true);
 				}
 			}
 
@@ -967,6 +994,15 @@
 		ev = this.pending_events[index];
 
 		if (ev) {
+			// SPA page loads
+
+			if (BOOMR.utils.inArray(ev.type, BOOMR.constants.BEACON_TYPE_SPAS) && !BOOMR.hasBrowserOnloadFired()) {
+				// browser onload hasn't fired yet, lets wait because there might be more interesting
+				// things on the way
+				this.setTimeout(SPA_TIMEOUT, index);
+				return;
+			}
+
 			if (ev.nodes_to_wait === 0) {
 				// TODO, if xhr event did not trigger additional resources then do not
 				// send a beacon unless it matches alwaysSendXhr. See !868
@@ -976,7 +1012,10 @@
 				if (ev.type === "click" && (ev.total_nodes === 0 || !ev.resource.url)) {
 					this.watch--;
 					this.pending_events[index] = undefined;
+
+					return;
 				}
+
 				// send event if there are no outstanding downloads
 				this.sendEvent(index);
 			}
@@ -1103,6 +1142,24 @@
 			if (index === (this.pending_events.length - 1)) {
 				// if we're the latest pending event then extend the timeout
 				if (BOOMR.utils.inArray(current_event.type, BOOMR.constants.BEACON_TYPE_SPAS)) {
+					// if we reached here then at least one resource was fetched.
+					// Send our SPA early beacon
+					if (!current_event.firedEarlyBeacon && BOOMR.plugins.Early && BOOMR.plugins.Early.is_supported()) {
+						if (this.timerEarlyBeacon) {
+							clearTimeout(this.timerEarlyBeacon);
+							this.timerEarlyBeacon = null;
+						}
+						this.timerEarlyBeacon = setTimeout(function() {
+							handler.timerEarlyBeacon = null;
+							// don't send an early beacon now if we are waiting for a new resource that started during our timeout
+							if (current_event.firedEarlyBeacon || current_event.nodes_to_wait !== 0) {
+								return;
+							}
+							current_event.firedEarlyBeacon = true;
+							BOOMR.plugins.Early.sendEarlyBeacon(current_event.resource, current_event.type);
+						}, SPA_EARLY_TIMEOUT);  // give the SPA framework a bit of time to load the resource
+					}
+
 					this.setTimeout(impl.spaIdleTimeout, index);
 				}
 				else {
@@ -1152,17 +1209,28 @@
 				(typeof node.getAttribute === "function" && node.getAttribute("xlink:href")) ||
 				node.href;
 
-			// no URL or javascript: or about: or data: URL, so no network activity
-			if (!url || url.match(/^(about:|javascript:|data:)/i)) {
-				return false;
-			}
-
 			// we get called from src/href attribute changes but also from nodes being added
 			// which may or may not have been seen here before.
 			// Check that if we've seen this node before, that the src/href in this case is
 			// different which means we need to fetch a new Resource from the server
 			if (node._bmr && node._bmr.url !== url) {
 				exisitingNodeSrcUrlChanged = true;
+			}
+
+			if (exisitingNodeSrcUrlChanged) {
+				if (typeof node._bmr.listener === "function") {
+					self.load_cb({target: node, type: "changed"});
+					//remove listeners
+					node.removeEventListener("load", node._bmr.listener);
+					node.removeEventListener("error", node._bmr.listener);
+					delete node._bmr.listener;
+				}
+				debugLog("mutation URL changed from " + node._bmr.url + " to " + url + " for event idx: " + node._bmr.idx + " node:" + node._bmr.res);
+			}
+
+			// no URL or javascript: or about: or data: URL, so no network activity
+			if (!url || url.match(/^(about:|javascript:|data:)/i)) {
+				return false;
 			}
 
 			if (node.nodeName === "IMG") {
@@ -1234,13 +1302,6 @@
 			// determine the resource number for this request
 			resourceNum = current_event.resources.length;
 
-			// create a placeholder ._bmr attribute
-			if (!node._bmr) {
-				node._bmr = {
-					end: {}
-				};
-			}
-
 			// keep track of all resources (URLs) seen for the root resource
 			if (!current_event.urls) {
 				current_event.urls = {};
@@ -1265,6 +1326,13 @@
 				current_event.resource.url = a.href;
 			}
 
+			// create a bookkeeping ._bmr attribute
+			if (!node._bmr) {
+				node._bmr = {
+					end: {}
+				};
+			}
+
 			// update _bmr with details about this resource
 			node._bmr.res = resourceNum;
 			node._bmr.idx = index;
@@ -1276,8 +1344,11 @@
 				// if either event fires then cleanup both listeners
 				node.removeEventListener("load", listener);
 				node.removeEventListener("error", listener);
+				delete node._bmr.listener;
+				debugLog("mutation URL on" + ev.type + ", for event idx: " + index + " node: " + resourceNum);
 			};
-			debugLog("Monitoring mutation URL: " + url + " for event id: " + index);
+			debugLog("Monitoring mutation URL: " + url + " for event idx: " + index + " node: " + resourceNum);
+			node._bmr.listener = listener;
 			node.addEventListener("load", listener);
 			node.addEventListener("error", listener);
 
@@ -1982,7 +2053,7 @@
 				excluded = false;
 
 				// Default value of async is true
-				if (async === undefined) {
+				if (typeof async === "undefined") {
 					async = true;
 				}
 
@@ -2060,14 +2131,14 @@
 							else {
 								// load, timeout, error, abort
 								if (ename === "load") {
-									if (req.status < 200 || req.status >= 400) {
+									if (req.status !== 0 && (req.status < 200 || req.status >= 400)) {
 										// put the HTTP error code on the resource if it's not a success
 										resource.status = req.status;
 									}
 								}
 								else {
 									// this is a timeout/error/abort, so add the status code
-									resource.status = (stat === undefined ? req.status : stat);
+									resource.status = (typeof stat === "undefined" ? req.status : stat);
 								}
 
 								impl.loadFinished(resource);
@@ -2195,7 +2266,6 @@
 	 * @property {string[]} spaBackendResources Default resources to count as Back-End during a SPA nav
 	 * @property {FilterObject[]} filters Array of {@link FilterObject} that is used to apply filters on XHR Requests
 	 * @property {boolean} initialized Set to true after the first run of
-	 * @property {string[]} addedVars Vars added to the next beacon only
 	 * {@link BOOMR.plugins.AutoXHR#init}
 	 */
 	impl = {
@@ -2203,7 +2273,6 @@
 		alwaysSendXhr: false,
 		excludeFilters: [],
 		initialized: false,
-		addedVars: [],
 		captureXhrRequestResponse: false,
 		singlePageApp: false,
 		autoXhrEnabled: false,
@@ -2259,16 +2328,6 @@
 				}
 			}
 			return false;
-		},
-
-		/**
-		 * Remove any added variables from this plugin from the beacon and clear internal collection of addedVars
-		 */
-		clear: function() {
-			if (impl.addedVars && impl.addedVars.length > 0) {
-				BOOMR.removeVar(impl.addedVars);
-				impl.addedVars = [];
-			}
 		},
 
 		/**
@@ -2441,16 +2500,7 @@
 			impl.autoXhrEnabled = config.instrument_xhr;
 
 			// check to see if any of the SPAs were enabled
-			if (BOOMR.plugins.SPA && BOOMR.plugins.SPA.supported_frameworks) {
-				var supported = BOOMR.plugins.SPA.supported_frameworks();
-				for (i = 0; i < supported.length; i++) {
-					var spa = supported[i];
-					if (config[spa] && config[spa].enabled) {
-						impl.singlePageApp = true;
-						break;
-					}
-				}
-			}
+			impl.singlePageApp = BOOMR.plugins.SPA && BOOMR.plugins.SPA.isSinglePageApp(config);
 
 			// Whether or not to always send XHRs.  If a SPA is enabled, this means it will
 			// send XHRs during the hard and soft navs.  If enabled, it will also disable
@@ -2499,8 +2549,6 @@
 			}
 
 			BOOMR.registerEvent("xhr_error");
-
-			BOOMR.subscribe("beacon", impl.clear, null, impl);
 		},
 
 		/**
