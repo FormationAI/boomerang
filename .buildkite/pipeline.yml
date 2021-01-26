@@ -13,8 +13,6 @@ steps:
     command:
       - ".ci/build"
       - ".ci/publish"
-    depends_on:
-      - "build"
     agents:
       napali: true
       queue: napali
