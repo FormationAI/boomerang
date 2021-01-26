@@ -16,7 +16,7 @@ FILENAME="${DATE}-${SHA}.zip"
 
 OUTPUT="${PREFIX}/boomerang/${FILENAME}"
 
-aws s3 cp ${ROOT}/boomerang/build/ ${OUTPUT}
+aws s3 cp ${ROOT}/build/ ${OUTPUT}
 
 COMMIT=$(git rev-parse HEAD)
 echo ${OUTPUT} | aws s3 cp - "s3://formation-dispensary/interfaces/boomerang/commits/${COMMIT}"
